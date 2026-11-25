@@ -1,0 +1,6 @@
+data/raw/
+data/out/
+reports/
+
+__pycache__/
+*.pyc
