@@ -58,12 +58,10 @@ Profiling Findings:
 
 Measured Defects:
 
-Measured Defects:
-
 - 78 records have a missing POSTCODE.
 - 38 records have a missing SNOMED_CODE.
-- 5 PRACTICE_CODE values do not exist in EPRACCUR.
-- 1 record has ACTUAL_COST less than or equal to zero.
+- 5 distinct PRACTICE_CODE values (20 rows, 0.03%) not found in EPRACCUR: 10Q998 (7), 8F7M3D (6), 91Q998 (5), 97R998 (1), NMS998 (1). None are Y-prefixed; all fail the standard letter-plus-five-digits format.
+- 1 row has ACTUAL_COST = 0; no negative values.
 
 Initial Observations:
 - Large transactional dataset
@@ -116,7 +114,9 @@ Profiling Findings:
 
 Measured Defects:
 
-- None yet.
+- 16 practices have fewer than 100 registered patients (minimum 1).
+- 7 registrations resolve to INACTIVE or DORMANT practices in EPRACCUR.
+- [third: pending]
 
 Measured Findings:
 
@@ -177,9 +177,9 @@ Profiling Findings:
 
 Measured Defects:
 
-- 3,096 records are not currently active (2,843 INACTIVE and 253 DORMANT).
-- These non-active records represent approximately 19.7% of the reference dataset.
-- 7 GP registration records resolve to non-active reference records.
+- 3,096 records (19.7%) are not active: 2,843 INACTIVE and 253 DORMANT.
+- [second: pending]
+- [third: pending]
 
 Initial Observations:
 - No header row

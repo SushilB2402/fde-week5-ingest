@@ -2,25 +2,29 @@
 
 ## Problem Statement
 
-NHS prescribing, patient registration and GP practice reference data are published independently by different organisations and in different formats. Although all three datasets describe GP practices, they cannot be joined directly because they use different schemas, naming conventions and levels of data quality.
+A fictional NHS analytics team wants to combine prescribing activity, patient registration counts and GP practice reference data to support reliable operational reporting.
 
-The objective of this project is to build a reproducible data ingestion and quality assessment pipeline that integrates multiple NHS datasets using GP Practice Code as a shared business key. The pipeline will standardise schemas, validate records, perform referential integrity checks and generate quality reports suitable for downstream analysis.
+Although these datasets describe the same organisations, they are published independently, use different schemas and naming conventions, and contain data quality issues that prevent straightforward integration.
+
+The objective of this project is to build a reproducible Python-based ingestion and validation pipeline that loads multiple NHS datasets, standardises business keys, performs quality checks, validates referential integrity and produces reconciliation and quality reports.
 
 ---
 
 ## Business Context
 
-Healthcare datasets are frequently published separately for operational and reporting purposes. Analysts wishing to understand prescribing behaviour relative to patient population or organisational status must first integrate the data into a consistent and reliable format.
+Healthcare datasets are commonly published separately for operational and reporting purposes.
 
-Without standardisation and validation, reporting may be affected by:
+Analysts wishing to compare prescribing activity against registered patient populations or organisational status must first integrate multiple datasets into a consistent format.
+
+Without standardisation and validation, reporting can be affected by:
 
 - Missing identifiers
-- Inconsistent schema definitions
-- Inactive organisations
 - Missing reference data
+- Inactive organisations
+- Schema inconsistencies
 - Referential integrity failures
 
-The project simulates a real-world data engineering workflow involving ingestion, normalisation, validation, reconciliation and reporting.
+This project simulates a realistic data engineering workflow involving ingestion, normalisation, validation, reconciliation and reporting.
 
 ---
 
@@ -28,76 +32,72 @@ The project simulates a real-world data engineering workflow involving ingestion
 
 ### Source 1 – English Prescribing Dataset (EPD)
 
-The English Prescribing Dataset contains prescribing activity for GP practices, including prescription volume, quantity, cost and SNOMED mappings.
+A transactional prescribing dataset containing prescription items, quantities, costs and SNOMED mappings for prescribing organisations (mostly GP practices).
 
 Characteristics:
 
-- Transactional dataset
 - Uses `PRACTICE_CODE`
-- Multiple rows per practice
-- Includes prescribing costs and quantities
+- Multiple records per organisation
+- Includes prescription quantities and costs
+- Contains GP and non-GP organisations
 - South East regional extract
+- Partial extract: 63,839 of 2,537,185 source records
 
 Observed quality issues:
 
 - Missing postcode values
 - Missing SNOMED codes
-- Practice codes not present in reference data
+- Practice codes not found in reference data
 
 ---
 
 ### Source 2 – GP Practice Patient Registrations
 
-This dataset provides monthly counts of registered patients per GP practice.
+A monthly snapshot containing registered patient counts by GP practice.
 
 Characteristics:
 
-- One row per practice
 - Uses `CODE`
-- Includes registered patient totals
-- Monthly snapshot data
+- One row per practice
+- Monthly population snapshot
 
 Observed quality issues:
 
-- Extremely small practice populations
-- References to practices that are not currently active
+- Extremely small patient lists
+- Registrations linked to inactive organisations
 
 ---
 
 ### Source 3 – EPRACCUR GP Practice Reference Data
 
-EPRACCUR provides organisational reference information for GP practices.
+Reference dataset containing organisation details, location information and operational status.
 
 Characteristics:
 
-- Reference dataset
 - No header row
-- Contains organisation status information
-- Used as the authoritative reference source for validation
+- Uses practice code as the primary identifier
+- Contains ACTIVE, INACTIVE and DORMANT organisations
+- Used as the reference source for validation
 
-Observed quality issues:
+Design decision:
 
-- INACTIVE organisations
-- DORMANT organisations
-- Mixed operational statuses requiring filtering before validation
+All records will be loaded. Operational status will be retained and reported rather than filtering inactive organisations during ingestion. This allows inactive practices to be distinguished from genuinely unknown codes.
 
 ---
 
 ## Integration Challenges
 
-The datasets are intentionally difficult to integrate because they contain structural and quality differences.
+The datasets cannot be joined directly because they contain structural and quality differences:
 
-Key challenges include:
-
-- Different key names (`PRACTICE_CODE`, `CODE`, and unnamed reference columns)
-- Different levels of granularity
-- Different snapshot dates
+- Different key names (`PRACTICE_CODE`, `CODE`, unnamed column)
+- Different dataset granularity
+- Different publication dates
 - Missing values
-- Inactive organisations within reference data
-- Headerless source files
+- Headerless source file
+- Active and inactive organisations
 - Referential integrity failures
 
-These issues create a realistic data engineering problem that requires standardisation and quality controls before analysis can take place.
+These differences create a realistic data engineering problem requiring standardisation and validation before analysis can be performed.
 
 ---
 
@@ -105,16 +105,59 @@ These issues create a realistic data engineering problem that requires standardi
 
 Build a Python-based ingestion pipeline that:
 
-1. Loads each source dataset.
+1. Loads all source files.
 2. Applies schema standardisation.
 3. Standardises GP Practice Codes.
-4. Executes automated quality checks.
-5. Validates records against EPRACCUR.
-6. Produces reconciliation outputs.
-7. Generates data quality reports.
-8. Exports validated datasets for analysis.
+4. Performs quality validation.
+5. Executes referential integrity checks against EPRACCUR.
+6. Produces reconciliation statistics.
+7. Generates quality reports.
+8. Exports validated outputs.
 
-The pipeline should be repeatable, testable and executable from a single command.
+The pipeline will be deterministic, repeatable and executable from a single command.
+
+---
+
+## Outputs
+
+`data/out/loaded_*.csv`
+
+Validated records per source in the common schema.
+
+`data/out/rejected.jsonl`
+
+Every rejected record including:
+
+- source
+- row number
+- raw record
+- rejection reason
+
+`reports/run_<timestamp>.md`
+
+Data quality report containing:
+
+- rows read
+- rows loaded
+- rows rejected
+- rule outcomes
+- rejection reasons
+- reconciliation results
+
+---
+
+## Out of Scope
+
+- No database implementation
+- No dashboard or visualisation layer
+- No workflow scheduling
+- No incremental loads
+- No API ingestion
+- File-based ingestion only
+- No analysis of prescribing volumes or costs
+- No correction of bad source data
+
+Records failing validation will be rejected and logged rather than modified.
 
 ---
 
@@ -123,35 +166,38 @@ The pipeline should be repeatable, testable and executable from a single command
 The pipeline will assess:
 
 - Missing mandatory fields
-- Duplicate records
-- Invalid GP Practice Codes
-- Invalid organisational status
-- Missing reference records
 - Missing postcodes
 - Missing SNOMED codes
-- Cost and quantity anomalies
-- Referential integrity violations
+- Duplicate records
+- Invalid practice codes
+- Referential integrity failures
+- Inactive organisations
+- Cost anomalies
+- Quantity anomalies
 
 ---
 
 ## Success Metrics
 
-The project will be considered successful if:
-
-- All datasets are loaded successfully.
-- GP Practice Codes are standardised across all sources.
-- Automated quality checks execute consistently.
-- Every source satisfies reconciliation requirements.
-- Source rows equal loaded rows plus rejected rows.
-- Rejected rows are logged with a rejection reason.
-- Referential integrity checks are performed against EPRACCUR.
-- Quality and reconciliation reports are generated.
-- Another engineer can reproduce the pipeline using the project documentation.
+- [ ] At least 50,000 rows read across all sources (currently 85,684).
+- [ ] One command (`make run`) executes the entire pipeline.
+- [ ] Every rejected record is written to `rejected.jsonl` with a reason.
+- [ ] 8–10 quality rules execute and appear in the report.
+- [ ] Referential checks report found-active, found-inactive and not-found counts.
+- [ ] For every source: source rows = loaded rows + rejected rows.
+- [ ] Quality and reconciliation reports are generated successfully.
+- [ ] A second person can run the project from the README alone by Sunday 29 Nov 2026.
 
 ---
 
 ## Known Limitations
 
-The datasets do not represent identical snapshots in time.
+Prescribing data represents September 2026, South East only, and is a partial extract (63,839 of 2,537,185 records, approximately 2.5% of the source dataset). Prescribing volumes and costs must not be interpreted as representative of wider activity.
 
-- Prescribing data represents 
+Patient registrations are recorded as at 1 September 2026.
+
+EPRACCUR was downloaded on 23 November 2026 and includes ACTIVE, INACTIVE and DORMANT organisations.
+
+Source 1 includes non-GP organisations represented by Y-prefixed organisation codes.
+
+The source datasets do not represent identical snapshots in time and may therefore contain expected differences in organisational status.

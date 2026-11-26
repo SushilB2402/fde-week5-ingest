@@ -113,6 +113,49 @@ print("\nEPRACCUR missing postcodes:")
 print(missing_postcodes)
 
 # ------------------------------------------------------------------
+# INVESTIGATE THE 5 MISSING CODES
+# ------------------------------------------------------------------
+
+missing_codes = set(epd["PRACTICE_CODE"]) - set(epraccur[0])
+
+print("\nMissing codes:")
+print(sorted(missing_codes))
+
+missing_rows = epd[
+    epd["PRACTICE_CODE"].isin(missing_codes)
+]
+
+print("\nRows affected by missing codes:")
+print(len(missing_rows))
+
+print("\nMissing code frequency:")
+print(
+    missing_rows["PRACTICE_CODE"]
+    .value_counts()
+)
+
+print("\nAre missing codes Y-prefixed?")
+print(
+    pd.Series(list(missing_codes))
+    .astype(str)
+    .str.startswith("Y")
+    .value_counts()
+)
+
+# ------------------------------------------------------------------
+# SPLIT COST CHECK
+# ------------------------------------------------------------------
+
+zero_cost = (epd["ACTUAL_COST"] == 0).sum()
+negative_cost = (epd["ACTUAL_COST"] < 0).sum()
+
+print("\nACTUAL_COST = 0:")
+print(zero_cost)
+
+print("\nACTUAL_COST < 0:")
+print(negative_cost)
+
+# ------------------------------------------------------------------
 # OPTIONAL SUMMARY
 # ------------------------------------------------------------------
 

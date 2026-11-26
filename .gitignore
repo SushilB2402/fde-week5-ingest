@@ -1,6 +1,23 @@
-data/raw/
-data/out/
-reports/
+# Virtual environment
+.venv/
 
+# Environment files
+.env
+
+# pytest
+.pytest_cache/
+
+# Python
 __pycache__/
 *.pyc
+
+# Data
+data/raw/
+data/out/
+
+# Reports
+reports/
+
+# Local outputs
+profiling_output.txt
+quality_results.txt
