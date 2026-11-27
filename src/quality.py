@@ -1,5 +1,5 @@
 """
-Data quality rule runner for Week 5 loaded output.
+Data quality rule runner for Week 5 loaded output (flag-and-report mode).
 """
 
 from __future__ import annotations
@@ -50,8 +50,7 @@ def setup_logging() -> None:
 
 def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Standardise string columns and turn whitespace/empty strings into NaN
-    so null checks and string operations behave predictably.
+    Standardise string columns and convert blank/whitespace strings to pd.NA.
     """
     out = df.copy()
     for col in out.columns:
@@ -91,56 +90,78 @@ def _make_result(
     df: pd.DataFrame,
     failed_mask: pd.Series,
     *,
-    force_fail: bool = False,
+    passed: bool | None = None,
+    failed_count: int | None = None,
+    total: int | None = None,
+    samples: list[dict] | None = None,
 ) -> RuleResult:
-    failed_count = int(failed_mask.sum()) if len(failed_mask) else 0
-    passed = (failed_count == 0) and (not force_fail)
+    computed_failed = int(failed_mask.sum()) if len(failed_mask) else 0
+    count = computed_failed if failed_count is None else failed_count
+    is_passed = (count == 0) if passed is None else passed
+    row_total = int(len(df)) if total is None else total
+    row_samples = _sample_rows(df, failed_mask) if samples is None else samples
     return RuleResult(
         id=rule_id,
         name=name,
         severity=severity,
-        passed=passed,
-        failed_count=failed_count,
-        total=int(len(df)),
-        samples=_sample_rows(df, failed_mask),
+        passed=is_passed,
+        failed_count=count,
+        total=row_total,
+        samples=row_samples,
     )
 
 
 def rule_qr01_active_postcode(df: pd.DataFrame) -> RuleResult:
-    epr = df[df["source"] == "epraccur"]
-    mask = (epr["status"] == "ACTIVE") & epr["postcode"].isna()
+    clean = prepare_df(df)
+    epr = clean[clean["source"] == "epraccur"]
+    active_missing_pc = (epr["status"] == "ACTIVE") & epr["postcode"].isna()
+    null_rate = float(epr["postcode"].isna().mean()) if len(epr) else 0.0
+    passed = (int(active_missing_pc.sum()) == 0) and (null_rate < 0.02)
     return _make_result(
         "QR-01",
         "Active practice missing postcode",
         "error",
         epr,
-        mask,
+        active_missing_pc,
+        passed=passed,
     )
 
 
 def rule_qr02_epd_metrics_and_snomed(df: pd.DataFrame) -> RuleResult:
-    epd = df[df["source"] == "epd"]
+    clean = prepare_df(df)
+    epd = clean[clean["source"] == "epd"]
     missing_metrics = epd["quantity"].isna() | epd["actual_cost"].isna()
-    snomed_null_rate = float(epd["snomed_code"].isna().mean()) if len(epd) else 0.0
-    snomed_breach = snomed_null_rate >= 0.01
-    result = _make_result(
+    missing_metrics_count = int(missing_metrics.sum()) if len(epd) else 0
+
+    snomed_missing = epd["snomed_code"].isna()
+    snomed_null_rate = float(snomed_missing.mean()) if len(epd) else 0.0
+    snomed_exceeds_1pct = snomed_null_rate > 0.01
+
+    if missing_metrics_count > 0:
+        return _make_result(
+            "QR-02",
+            "EPD missing quantity/cost",
+            "error",
+            epd,
+            missing_metrics,
+            passed=False,
+            failed_count=missing_metrics_count,
+        )
+
+    return _make_result(
         "QR-02",
-        "EPD missing quantity/cost or high SNOMED null rate",
-        "error",
+        "EPD SNOMED null rate exceeds 1%",
+        "warning",
         epd,
-        missing_metrics,
-        force_fail=snomed_breach,
+        snomed_missing,
+        passed=not snomed_exceeds_1pct,
+        failed_count=int(snomed_missing.sum()) if len(epd) else 0,
     )
-    if snomed_breach and int(missing_metrics.sum()) == 0:
-        # Count rows missing snomed_code as the reported metric when snomed rate breaches threshold
-        snomed_mask = epd["snomed_code"].isna()
-        result.failed_count = int(snomed_mask.sum())
-        result.samples = _sample_rows(epd, snomed_mask)
-    return result
 
 
 def rule_qr03_epraccur_unique_code(df: pd.DataFrame) -> RuleResult:
-    epr = df[df["source"] == "epraccur"]
+    clean = prepare_df(df)
+    epr = clean[clean["source"] == "epraccur"]
     mask = epr.duplicated(subset=["practice_code"], keep=False)
     return _make_result(
         "QR-03",
@@ -152,7 +173,8 @@ def rule_qr03_epraccur_unique_code(df: pd.DataFrame) -> RuleResult:
 
 
 def rule_qr04_registrations_unique_code(df: pd.DataFrame) -> RuleResult:
-    reg = df[df["source"] == "registrations"]
+    clean = prepare_df(df)
+    reg = clean[clean["source"] == "registrations"]
     mask = reg.duplicated(subset=["practice_code"], keep=False)
     return _make_result(
         "QR-04",
@@ -164,58 +186,70 @@ def rule_qr04_registrations_unique_code(df: pd.DataFrame) -> RuleResult:
 
 
 def rule_qr05_patient_count_range(df: pd.DataFrame) -> RuleResult:
-    reg = df[df["source"] == "registrations"]
+    clean = prepare_df(df)
+    reg = clean[clean["source"] == "registrations"]
     counts = pd.to_numeric(reg["patient_count"], errors="coerce")
-    mask = counts.isna() | (~counts.between(1, 100_000, inclusive="both"))
+
+    invalid_or_non_positive = counts.isna() | (counts <= 0)
+    high_list_size = counts.notna() & (counts > 100_000)
+
+    if int(invalid_or_non_positive.sum()) > 0:
+        return _make_result(
+            "QR-05",
+            "Patient count missing or <= 0",
+            "error",
+            reg,
+            invalid_or_non_positive,
+        )
+
     return _make_result(
         "QR-05",
-        "Patient count outside 1..100,000",
-        "error",
+        "Patient count exceeds 100,000",
+        "warning",
         reg,
-        mask,
+        high_list_size,
     )
 
-
 def rule_qr06_epd_quantity_and_cost_range(df: pd.DataFrame) -> RuleResult:
-    epd = df[df["source"] == "epd"]
+    clean = prepare_df(df)
+    epd = clean[clean["source"] == "epd"]
     qty = pd.to_numeric(epd["quantity"], errors="coerce")
     cost = pd.to_numeric(epd["actual_cost"], errors="coerce")
     mask = qty.isna() | (qty <= 0) | cost.isna() | (cost < 0.01)
     return _make_result(
         "QR-06",
         "EPD quantity <= 0 or actual_cost < 0.01",
-        "error",
+        "warning",
         epd,
         mask,
     )
 
 
 def rule_qr07_uk_postcode_format(df: pd.DataFrame) -> RuleResult:
-    present = df[df["postcode"].notna()]
+    clean = prepare_df(df)
+    present = clean[clean["postcode"].notna()]
     valid_fmt = present["postcode"].astype(str).str.upper().str.match(UK_POSTCODE_RE)
     mask = ~valid_fmt
+    valid_rate = float(valid_fmt.mean()) if len(present) else 1.0
     return _make_result(
         "QR-07",
         "Postcode fails UK postcode format",
         "error",
         present,
         mask,
+        passed=(valid_rate >= 0.995),
     )
-
-
-def build_epraccur_reference_set(df: pd.DataFrame) -> set[str]:
-    epr = df[df["source"] == "epraccur"]
-    return set(epr["practice_code"].dropna().astype(str))
 
 
 def make_qr08_referential_rule(reference_codes: set[str]) -> RuleFn:
     def rule_qr08_practice_in_epraccur(df: pd.DataFrame) -> RuleResult:
-        non_epr = df[df["source"] != "epraccur"]
+        clean = prepare_df(df)
+        non_epr = clean[clean["source"] != "epraccur"]
         mask = ~non_epr["practice_code"].isin(reference_codes)
         return _make_result(
             "QR-08",
             "Practice code missing from EPRACCUR lookup",
-            "error",
+            "warning",
             non_epr,
             mask,
         )
@@ -225,15 +259,18 @@ def make_qr08_referential_rule(reference_codes: set[str]) -> RuleFn:
 
 def make_qr09_non_active_practice_rule(status_by_code: dict[str, str | None]) -> RuleFn:
     def rule_qr09_non_active_practice(df: pd.DataFrame) -> RuleResult:
-        non_epr = df[df["source"] != "epraccur"].copy()
+        clean = prepare_df(df)
+        non_epr = clean[clean["source"] != "epraccur"].copy()
         mapped_status = non_epr["practice_code"].map(status_by_code)
         mask = mapped_status.notna() & (mapped_status != "ACTIVE")
+        non_active_rate = float(mask.mean()) if len(non_epr) else 0.0
         return _make_result(
             "QR-09",
             "Non-EPRACCUR row references non-ACTIVE practice",
             "warning",
             non_epr,
             mask,
+            passed=(non_active_rate < 0.02),
         )
 
     return rule_qr09_non_active_practice
@@ -244,10 +281,11 @@ def make_qr10_volume_drift_rule(
     tolerance: float = 0.15,
 ) -> RuleFn:
     def rule_qr10_source_volume(df: pd.DataFrame) -> RuleResult:
+        clean = prepare_df(df)
         drift_rows: list[dict] = []
         drifted_count = 0
         for src, expected in baselines.items():
-            actual = int((df["source"] == src).sum())
+            actual = int((clean["source"] == src).sum())
             low = expected * (1.0 - tolerance)
             high = expected * (1.0 + tolerance)
             if not (low <= actual <= high):
@@ -274,7 +312,8 @@ def make_qr10_volume_drift_rule(
 
 
 def build_rules(df: pd.DataFrame) -> list[RuleFn]:
-    epr = df[df["source"] == "epraccur"]
+    clean = prepare_df(df)
+    epr = clean[clean["source"] == "epraccur"]
     ref_codes = set(epr["practice_code"].dropna().astype(str))
     status_by_code = dict(zip(epr["practice_code"], epr["status"]))
 
@@ -296,7 +335,6 @@ def load_dataset(path: Path = LOADED_CSV_PATH, chunk_size: int = DEFAULT_CHUNK_S
     if not path.exists():
         raise FileNotFoundError(f"Loaded dataset not found: {path}")
 
-    # Read in chunks so large files keep memory predictable, then prepare types
     chunks: list[pd.DataFrame] = []
     for chunk in pd.read_csv(path, dtype=str, chunksize=chunk_size):
         chunks.append(prepare_df(chunk))
