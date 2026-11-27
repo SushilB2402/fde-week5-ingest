@@ -1,0 +1,18 @@
+# Data Quality Rules
+
+These rules run in `quality.py` after Pydantic schema validation (`schema.py`).  
+- **Error** rules reject individual rows into `data/out/quality_rejected.jsonl` so every dropped row is accounted for in reconciliation.  
+- **Warning** rules flag dataset-level anomalies in `reports/quality_report.md` without removing rows.
+
+| ID | Rule | Group | Check (Plain Words) | Threshold | Severity | Action |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **QR-01** | Missing postcode on active practice | Nulls | Every `epraccur` row with status `ACTIVE` must have a non-empty `postcode`. | `0` missing postcodes on `ACTIVE` practices (overall null rate `< 2%`) | **Error** | Reject the row and log `practice_code` and `source_row`. |
+| **QR-02** | Missing prescribing metrics on EPD row | Nulls | Every `epd` row must have both `quantity` and `actual_cost` populated, and missing `snomed_code` must stay below threshold. | `0` nulls for `quantity`/`actual_cost`; `< 1%` null rate for `snomed_code` | **Error** (metrics) / **Warning** (SNOMED rate) | Reject rows missing `quantity` or `actual_cost`; warn if `snomed_code` null rate exceeds `1%`. |
+| **QR-03** | Duplicate practice code in EPRACCUR | Duplicates | Each `practice_code` must appear at most once in `epraccur`. | `0` duplicate `practice_code` values in `epraccur` | **Error** | Keep the first occurrence and reject subsequent duplicate rows. |
+| **QR-04** | Duplicate practice registration record | Duplicates | Each `practice_code` must appear at most once in `registrations`. | `0` duplicate `practice_code` values in `registrations` | **Error** | Keep the first occurrence and reject subsequent duplicate rows. |
+| **QR-05** | Zero or extreme patient list size | Ranges | `patient_count` on `registrations` rows must fall within a realistic GP practice range (`1` to `100,000`). | `1 <= patient_count <= 100,000` (`0` rows outside range) | **Error** | Reject rows where `patient_count == 0` or `patient_count > 100,000`. |
+| **QR-06** | Zero quantity or negative/zero actual cost | Ranges | On `epd` rows, `quantity` must be `> 0` and `actual_cost` must be `>= 0.01` (no free or negative-cost prescriptions). | `quantity > 0` and `actual_cost >= 0.01` | **Error** | Reject rows with `quantity == 0` or `actual_cost < 0.01`. |
+| **QR-07** | UK postcode format | Format | Non-null `postcode` values across all sources must match standard UK outward/inward postcode format (e.g., `TS18 1HU`). | `>= 99.5%` valid format (`0` malformed postcodes expected) | **Error** | Reject rows whose non-null `postcode` does not match the UK postcode pattern. |
+| **QR-08** | Practice code exists in EPRACCUR master | Referential | Every `practice_code` in `epd` and `registrations` must exist in `epraccur`. | `100%` match (`0` orphan `practice_code` rows) | **Error** | Reject orphan rows whose `practice_code` is absent from `epraccur`. |
+| **QR-09** | Prescribing against non-active practice | Consistency | `epd` and `registrations` rows should reference a practice whose `epraccur` status is `ACTIVE` (flagging `INACTIVE` or `DORMANT` practices). | `< 2%` of rows linked to `INACTIVE`/`DORMANT` practices | **Warning** | Keep rows loaded; list affected `practice_code`s and row counts in the quality report. |
+| **QR-10** | Source row volume within expected bounds | Volume | Each source's loaded row count must stay within `±15%` of the baseline profiling count (`epd`: ~63,839; `registrations`: ~6,128; `epraccur`: ~15,717). | Within `85%–115%` of baseline row count | **Warning** | Keep rows loaded; flag a volume drift alert in the quality report. |
